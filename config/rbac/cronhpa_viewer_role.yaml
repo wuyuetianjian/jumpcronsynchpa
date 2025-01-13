@@ -1,0 +1,23 @@
+# permissions for end users to view cronhpas.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: jumpcronsynchpa
+    app.kubernetes.io/managed-by: kustomize
+  name: cronhpa-viewer-role
+rules:
+- apiGroups:
+  - jumpserver.sunny.io
+  resources:
+  - cronhpas
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - jumpserver.sunny.io
+  resources:
+  - cronhpas/status
+  verbs:
+  - get

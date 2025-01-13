@@ -1,0 +1,9 @@
+apiVersion: jumpserver.sunny.io/v1
+kind: CronHPA
+metadata:
+  labels:
+    app.kubernetes.io/name: jumpcronsynchpa
+    app.kubernetes.io/managed-by: kustomize
+  name: cronhpa-sample
+spec:
+  # TODO(user): Add fields here
