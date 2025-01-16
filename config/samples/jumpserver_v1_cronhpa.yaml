@@ -6,4 +6,19 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: cronhpa-sample
 spec:
-  # TODO(user): Add fields here
+  syncUserGroup:
+    - name: "ts-user-sync-to-FPGA"
+      schedule: "*/1 * * * *"
+      userSourceUrl: "https://devops.calterah.com/api/fpga/get_all_fpga_users"
+      jumpserverUrl: "https://jumpsvc.calterah.com"
+      jumpserverAccessKey: "f7488f76-998c-455e-bb52-f3c2891ac31c"
+      jumpserverSecurityKey: "07896a52-04a1-4452-81ff-c69dc76e9bbd"
+      userGroupName: ""
+  SyncAssetsGroup:
+    - name: "ts-assets-sync-to-FPGA"
+      schedule: "*/1 * * * *"
+      hostSourceUrl: "https://devops.calterah.com/api/fpga/get_all_fpga_asset"
+      jumpserverUrl: "https://jumpsvc.calterah.com"
+      jumpserverAccessKey: "f7488f76-998c-455e-bb52-f3c2891ac31c"
+      jumpserverSecurityKey: "07896a52-04a1-4452-81ff-c69dc76e9bbd"
+      assetsPointId: ""

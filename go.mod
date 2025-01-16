@@ -5,10 +5,13 @@ go 1.22.0
 require (
 	github.com/onsi/ginkgo/v2 v2.19.0
 	github.com/onsi/gomega v1.33.1
+	gopkg.in/twindagger/httpsig.v1 v1.2.0
 	k8s.io/apimachinery v0.31.0
 	k8s.io/client-go v0.31.0
 	sigs.k8s.io/controller-runtime v0.19.1
 )
+
+require github.com/dgrijalva/jwt-go v3.2.0+incompatible // indirect
 
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect

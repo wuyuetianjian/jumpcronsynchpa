@@ -18,6 +18,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -29,12 +33,44 @@ import (
 
 	"github.com/robfig/cron"
 	jumpserverv1 "github.com/wuyuetianjian/jumpcronsynchpa/api/v1"
+	"gopkg.in/twindagger/httpsig.v1"
 )
 
 // CronHPAReconciler reconciles a CronHPA object
 type CronHPAReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type TSUser struct {
+	Status     int      `json:"status"`
+	StatusText string   `json:"statusText"`
+	Data       []string `json:"data"`
+}
+
+type TSAsset struct {
+	Status     int           `json:"status"`
+	StatusText string        `json:"statusText"`
+	Data       []TSAssetInfo `json:"data"`
+}
+
+type TSAssetInfo struct {
+	AssetName   string `json:"asset_name"`
+	IP          string `json:"ip"`
+	Hostname    string `json:"hostname"`
+	OS          string `json:"os"`
+	LoginUser   string `json:"login_user"`
+	ConnectType string `json:"connect_type"`
+	ConnectPort int    `json:"connect_port"`
+}
+
+type JumpserverUserInfo struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	UserName string   `json:"username"`
+	Email    string   `json:"email"`
+	Source   string   `json:"source"`
+	Groups   []string `json:"groups"`
 }
 
 // +kubebuilder:rbac:groups=jumpserver.sunny.io,resources=cronhpas,verbs=get;list;watch;create;update;patch;delete
@@ -69,6 +105,10 @@ func (r *CronHPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// 遍历用户jobs，检查调度时间并更新内容
 	for _, job := range cronhpa.Spec.SyncUserGroup {
 		lastRunTime := cronhpa.Status.LastRunTimes[job.Name]
+		auth := JumpSigAuth{
+			KeyID:    job.JumpserverAK,
+			SecretID: job.JumpserverSK,
+		}
 		// 计算上次运行时间之后的下一个调度时间
 		nextScheduledTime, err := r.getNextScheduledTime(job.Schedule, lastRunTime.Time)
 		if err != nil {
@@ -80,7 +120,19 @@ func (r *CronHPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 		// 检查当前时间是否已经到达或超过了计划的运行时间
 		if now.After(nextScheduledTime) || now.Equal(nextScheduledTime) {
-			// 更新内容
+			userinfo, err := r.TSGetUsers(ctx, &job)
+			if err != nil {
+				log.Error(err, "Failed to get userinfo from TS")
+				return reconcile.Result{}, err
+			}
+			if userinfo.Status == 200 && len(userinfo.Data) > 0 {
+				for _, username := range userinfo.Data {
+					jumpUserIfo, err := r.GetJumpUsers(ctx, &auth, &job, username)
+					if err != nil {
+						return reconcile.Result{}, err
+					}
+				}
+			}
 
 		} else {
 			// 如果当前时间未到达计划时间，将这个时间作为下一次运行时间
@@ -105,6 +157,13 @@ func (r *CronHPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// 检查当前时间是否已经到达或超过了计划的运行时间
 		if now.After(nextScheduledTime) || now.Equal(nextScheduledTime) {
 			// 更新内容
+			assetsinfo, err := r.TSGetAssets(ctx, &job)
+			if err != nil {
+				log.Error(err, "Failed to get assetsinfo from TS")
+				return reconcile.Result{}, err
+			}
+			if assetsinfo.Status == 200 && len(assetsinfo.Data) > 0 {
+			}
 
 		} else {
 			// 如果当前时间未到达计划时间，将这个时间作为下一次运行时间
@@ -132,6 +191,70 @@ func (r *CronHPAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
+func (r *CronHPAReconciler) TSGetAssets(ctx context.Context, cronhpa *jumpserverv1.SyncAssetsGroup) (res *TSAsset, err error) {
+	urlPath := cronhpa.HostSourceURL
+	req, err := http.NewRequest("GET", urlPath, nil)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+	_ = json.Unmarshal(body, &res)
+	return res, nil
+}
+
+func (r *CronHPAReconciler) TSGetUsers(ctx context.Context, cronhpa *jumpserverv1.SyncUserGroup) (res *TSUser, err error) {
+	urlPath := cronhpa.UserSourceURL
+	req, err := http.NewRequest("GET", urlPath, nil)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+	_ = json.Unmarshal(body, &res)
+	return res, nil
+}
+
+func (r *CronHPAReconciler) GetJumpUsers(ctx context.Context, auth *JumpSigAuth, cronhpa *jumpserverv1.SyncUserGroup, username string) (res []*JumpserverUserInfo, err error) {
+	if username == "" {
+		return nil, fmt.Errorf("username is empty")
+	}
+	urlPath := cronhpa.JumpserverURL + "/api/v1/users/users/?username=" + username
+
+	gmtFmt := "Mon, 02 Jan 2006 15:04:05 GMT"
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", urlPath, nil)
+	req.Header.Add("Date", time.Now().Format(gmtFmt))
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("X-JMS-ORG", "00000000-0000-0000-0000-000000000000")
+	if err != nil {
+		return nil, err
+	}
+	if err := auth.Sign(req); err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(body, &res)
+	if len(res) == 0 {
+		return nil, fmt.Errorf("user %s not found", username)
+	}
+	return res, nil
+}
+
 func (r *CronHPAReconciler) getNextScheduledTime(schedule string, after time.Time) (time.Time, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	cronSchedule, err := parser.Parse(schedule)
@@ -140,6 +263,20 @@ func (r *CronHPAReconciler) getNextScheduledTime(schedule string, after time.Tim
 	}
 
 	return cronSchedule.Next(after), nil
+}
+
+type JumpSigAuth struct {
+	KeyID    string
+	SecretID string
+}
+
+func (auth *JumpSigAuth) Sign(r *http.Request) error {
+	headers := []string{"(request-target)", "date"}
+	signer, err := httpsig.NewRequestSigner(auth.KeyID, auth.SecretID, "hmac-sha256")
+	if err != nil {
+		return err
+	}
+	return signer.SignRequest(r, headers, nil)
 }
 
 // SetupWithManager sets up the controller with the Manager.
